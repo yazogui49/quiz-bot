@@ -142,6 +142,16 @@ async def on_unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
+async def _post_init(application: Application) -> None:
+    await db.init_pool()
+    logger.info("DB pool initialised")
+
+
+async def _post_shutdown(application: Application) -> None:
+    await db.close_pool()
+    logger.info("DB pool closed")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -150,6 +160,8 @@ def main() -> None:
     app = (
         Application.builder()
         .token(token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
         .build()
     )
 
