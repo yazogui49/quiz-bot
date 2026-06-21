@@ -1,0 +1,750 @@
+{
+  "name": "Telegram Quiz Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "webhookId": "quiz-bot-webhook",
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Route incoming update to the correct branch\nconst update = $input.first().json;\n\nlet type = 'unknown';\nlet telegramUserId = null;\nlet firstName = null;\nlet callbackData = null;\nlet callbackQueryId = null;\nlet chatId = null;\n\nif (update.callback_query) {\n  const cq = update.callback_query;\n  telegramUserId = cq.from.id;\n  firstName = cq.from.first_name;\n  chatId = cq.message.chat.id;\n  callbackQueryId = cq.id;\n  callbackData = cq.data;\n\n  if (callbackData === 'restart') {\n    type = 'restart';\n  } else if (callbackData && callbackData.startsWith('flag_')) {\n    type = 'flag';\n  } else if (['1','2','3','4'].includes(callbackData)) {\n    type = 'answer';\n  }\n} else if (update.message) {\n  const msg = update.message;\n  telegramUserId = msg.from.id;\n  firstName = msg.from.first_name;\n  chatId = msg.chat.id;\n  const text = (msg.text || '').trim();\n  if (text === '/start' || text === 'התחל לשחק' || text === '') {\n    type = 'start';\n  } else {\n    type = 'start'; // treat any plain text as /start for v1\n  }\n}\n\nreturn [{\n  json: {\n    type,\n    telegramUserId,\n    firstName,\n    chatId,\n    callbackData,\n    callbackQueryId\n  }\n}];\n"
+      },
+      "id": "route-update",
+      "name": "Route Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.type }}", "rightValue": "start", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.type }}", "rightValue": "answer", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.type }}", "rightValue": "flag", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.type }}", "rightValue": "restart", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "fallbackOutput": "extra"
+      },
+      "id": "switch-type",
+      "name": "Switch: Update Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [440, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (telegram_user_id, name)\nVALUES ({{ $json.telegramUserId }}, '{{ $json.firstName.replace(/'/g, \"''\") }}')\nON CONFLICT (telegram_user_id) DO UPDATE SET name = EXCLUDED.name\nRETURNING id, telegram_user_id, name;",
+        "options": {}
+      },
+      "id": "upsert-user-start",
+      "name": "Upsert User (Start)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 100],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $input.first().json;\nconst routeData = $('Route Update').first().json;\nreturn [{ json: { ...routeData, userId: user.id } }];\n"
+      },
+      "id": "merge-start",
+      "name": "Merge: userId (Start)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT q.*\nFROM questions q\nWHERE q.id NOT IN (\n  SELECT question_id FROM answers_log WHERE user_id = {{ $json.userId }}\n)\nORDER BY RANDOM()\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fetch-question-start",
+      "name": "Fetch Next Question (Start)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1140, 100],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $input.first().json;\nconst ctx = $('Merge: userId (Start)').first().json;\n\nif (!question || !question.id) {\n  return [{ json: { ...ctx, questionFound: false } }];\n}\nreturn [{ json: { ...ctx, questionFound: true, question } }];\n"
+      },
+      "id": "check-question-start",
+      "name": "Check Question Found (Start)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [{ "leftValue": "={{ $json.questionFound }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }]
+        }
+      },
+      "id": "if-found-start",
+      "name": "Question Found? (Start)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1580, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { chatId, question } = $json;\nconst q = question;\n\nconst text =\n  `*${q.question}*\\n\\n` +\n  `1\\. ${q.option_a}\\n` +\n  `2\\. ${q.option_b}\\n` +\n  `3\\. ${q.option_c}\\n` +\n  `4\\. ${q.option_d}\\n\\n` +\n  `מה התשובה הכי נכונה?`;\n\nconst inline_keyboard = [\n  [\n    { text: '1', callback_data: `1|${q.id}` },\n    { text: '2', callback_data: `2|${q.id}` },\n    { text: '3', callback_data: `3|${q.id}` },\n    { text: '4', callback_data: `4|${q.id}` }\n  ],\n  [\n    { text: 'סמן כשאלה לא ברורה', callback_data: `flag_${q.id}` }\n  ]\n];\n\nreturn [{\n  json: {\n    chatId,\n    text,\n    reply_markup: JSON.stringify({ inline_keyboard })\n  }\n}];\n"
+      },
+      "id": "build-question-msg",
+      "name": "Build Question Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 60]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "MarkdownV2",
+          "reply_markup": "={{ $json.reply_markup }}"
+        }
+      },
+      "id": "send-question-start",
+      "name": "Send Question (Start)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2020, 60],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "🎉 כל הכבוד! סיימת את כל השאלות.\\nלחץ כדי להתחיל מחדש:",
+        "additionalFields": {
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"התחל מחדש 🔄\",\"callback_data\":\"restart\"}]]}"
+        }
+      },
+      "id": "send-done-start",
+      "name": "Send Done Message (Start)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1800, 180],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// Parse callback_data format: \"<answer>|<questionId>\"\nconst routeData = $json;\nconst parts = (routeData.callbackData || '').split('|');\nconst answer = parts[0];\nconst questionId = parseInt(parts[1], 10);\nreturn [{ json: { ...routeData, answer, questionId } }];\n"
+      },
+      "id": "parse-answer",
+      "name": "Parse Answer Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (telegram_user_id, name)\nVALUES ({{ $json.telegramUserId }}, '{{ $json.firstName.replace(/'/g, \"''\") }}')\nON CONFLICT (telegram_user_id) DO UPDATE SET name = EXCLUDED.name\nRETURNING id;",
+        "options": {}
+      },
+      "id": "upsert-user-answer",
+      "name": "Upsert User (Answer)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [920, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $input.first().json;\nconst parsed = $('Parse Answer Callback').first().json;\nreturn [{ json: { ...parsed, userId: user.id } }];\n"
+      },
+      "id": "merge-answer",
+      "name": "Merge: userId (Answer)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, correct_answer FROM questions WHERE id = {{ $json.questionId }};",
+        "options": {}
+      },
+      "id": "fetch-question-for-check",
+      "name": "Fetch Question (Check Answer)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1360, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const questionRow = $input.first().json;\nconst ctx = $('Merge: userId (Answer)').first().json;\nconst wasCorrect = ctx.answer === questionRow.correct_answer;\nreturn [{ json: { ...ctx, correctAnswer: questionRow.correct_answer, wasCorrect } }];\n"
+      },
+      "id": "evaluate-answer",
+      "name": "Evaluate Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO answers_log (user_id, question_id, was_correct)\nVALUES ({{ $json.userId }}, {{ $json.questionId }}, {{ $json.wasCorrect }})\nON CONFLICT DO NOTHING;",
+        "options": {}
+      },
+      "id": "log-answer",
+      "name": "Log Answer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1800, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "operation": "answerQuery",
+        "queryId": "={{ $('Evaluate Answer').first().json.callbackQueryId }}",
+        "additionalFields": {}
+      },
+      "id": "ack-callback-answer",
+      "name": "Ack Callback (Answer)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2020, 300],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Evaluate Answer').first().json;\nconst feedbackText = ctx.wasCorrect\n  ? '✅ נכון! כל הכבוד!'\n  : `❌ לא נכון. התשובה הנכונה היא ${ctx.correctAnswer}.`;\nreturn [{ json: { ...ctx, feedbackText } }];\n"
+      },
+      "id": "build-feedback",
+      "name": "Build Feedback Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.feedbackText }}"
+      },
+      "id": "send-feedback",
+      "name": "Send Feedback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2460, 300],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT q.*\nFROM questions q\nWHERE q.id NOT IN (\n  SELECT question_id FROM answers_log WHERE user_id = {{ $('Evaluate Answer').first().json.userId }}\n)\nORDER BY RANDOM()\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fetch-next-question-answer",
+      "name": "Fetch Next Question (Answer)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2680, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $input.first().json;\nconst ctx = $('Evaluate Answer').first().json;\n\nif (!question || !question.id) {\n  return [{ json: { ...ctx, questionFound: false } }];\n}\nreturn [{ json: { ...ctx, questionFound: true, question } }];\n"
+      },
+      "id": "check-next-answer",
+      "name": "Check Next Question (Answer)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [{ "leftValue": "={{ $json.questionFound }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }]
+        }
+      },
+      "id": "if-found-answer",
+      "name": "Question Found? (Answer)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { chatId, question } = $json;\nconst q = question;\n\nconst text =\n  `*${q.question}*\\n\\n` +\n  `1\\. ${q.option_a}\\n` +\n  `2\\. ${q.option_b}\\n` +\n  `3\\. ${q.option_c}\\n` +\n  `4\\. ${q.option_d}\\n\\n` +\n  `מה התשובה הכי נכונה?`;\n\nconst inline_keyboard = [\n  [\n    { text: '1', callback_data: `1|${q.id}` },\n    { text: '2', callback_data: `2|${q.id}` },\n    { text: '3', callback_data: `3|${q.id}` },\n    { text: '4', callback_data: `4|${q.id}` }\n  ],\n  [\n    { text: 'סמן כשאלה לא ברורה', callback_data: `flag_${q.id}` }\n  ]\n];\n\nreturn [{\n  json: {\n    chatId,\n    text,\n    reply_markup: JSON.stringify({ inline_keyboard })\n  }\n}];\n"
+      },
+      "id": "build-next-question-msg",
+      "name": "Build Next Question Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3340, 260]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "MarkdownV2",
+          "reply_markup": "={{ $json.reply_markup }}"
+        }
+      },
+      "id": "send-next-question",
+      "name": "Send Next Question (Answer)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3560, 260],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "🎉 כל הכבוד! סיימת את כל השאלות.\\nלחץ כדי להתחיל מחדש:",
+        "additionalFields": {
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"התחל מחדש 🔄\",\"callback_data\":\"restart\"}]]}"
+        }
+      },
+      "id": "send-done-answer",
+      "name": "Send Done Message (Answer)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3340, 380],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const routeData = $json;\nconst questionId = parseInt((routeData.callbackData || '').replace('flag_', ''), 10);\nreturn [{ json: { ...routeData, questionId } }];\n"
+      },
+      "id": "parse-flag",
+      "name": "Parse Flag Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (telegram_user_id, name)\nVALUES ({{ $json.telegramUserId }}, '{{ $json.firstName.replace(/'/g, \"''\") }}')\nON CONFLICT (telegram_user_id) DO UPDATE SET name = EXCLUDED.name\nRETURNING id;",
+        "options": {}
+      },
+      "id": "upsert-user-flag",
+      "name": "Upsert User (Flag)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [920, 500],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $input.first().json;\nconst parsed = $('Parse Flag Callback').first().json;\nreturn [{ json: { ...parsed, userId: user.id } }];\n"
+      },
+      "id": "merge-flag",
+      "name": "Merge: userId (Flag)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO question_flags (user_id, question_id)\nVALUES ({{ $json.userId }}, {{ $json.questionId }})\nON CONFLICT (user_id, question_id) DO NOTHING;",
+        "options": {}
+      },
+      "id": "insert-flag",
+      "name": "Insert Flag",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1360, 500],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "operation": "answerQuery",
+        "queryId": "={{ $('Merge: userId (Flag)').first().json.callbackQueryId }}",
+        "additionalFields": {
+          "text": "תודה על הדיווח 🙏",
+          "show_alert": false
+        }
+      },
+      "id": "ack-flag",
+      "name": "Ack Callback (Flag)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1580, 500],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT q.*\nFROM questions q\nWHERE q.id NOT IN (\n  SELECT question_id FROM answers_log WHERE user_id = {{ $('Merge: userId (Flag)').first().json.userId }}\n)\nAND q.id != {{ $('Merge: userId (Flag)').first().json.questionId }}\nORDER BY RANDOM()\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fetch-next-question-flag",
+      "name": "Fetch Next Question (Flag)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1800, 500],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $input.first().json;\nconst ctx = $('Merge: userId (Flag)').first().json;\n\nif (!question || !question.id) {\n  return [{ json: { ...ctx, questionFound: false } }];\n}\nreturn [{ json: { ...ctx, questionFound: true, question } }];\n"
+      },
+      "id": "check-next-flag",
+      "name": "Check Next Question (Flag)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2020, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [{ "leftValue": "={{ $json.questionFound }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }]
+        }
+      },
+      "id": "if-found-flag",
+      "name": "Question Found? (Flag)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2240, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { chatId, question } = $json;\nconst q = question;\n\nconst text =\n  `*${q.question}*\\n\\n` +\n  `1\\. ${q.option_a}\\n` +\n  `2\\. ${q.option_b}\\n` +\n  `3\\. ${q.option_c}\\n` +\n  `4\\. ${q.option_d}\\n\\n` +\n  `מה התשובה הכי נכונה?`;\n\nconst inline_keyboard = [\n  [\n    { text: '1', callback_data: `1|${q.id}` },\n    { text: '2', callback_data: `2|${q.id}` },\n    { text: '3', callback_data: `3|${q.id}` },\n    { text: '4', callback_data: `4|${q.id}` }\n  ],\n  [\n    { text: 'סמן כשאלה לא ברורה', callback_data: `flag_${q.id}` }\n  ]\n];\n\nreturn [{\n  json: {\n    chatId,\n    text,\n    reply_markup: JSON.stringify({ inline_keyboard })\n  }\n}];\n"
+      },
+      "id": "build-next-question-flag",
+      "name": "Build Next Question Message (Flag)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2460, 460]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "MarkdownV2",
+          "reply_markup": "={{ $json.reply_markup }}"
+        }
+      },
+      "id": "send-next-question-flag",
+      "name": "Send Next Question (Flag)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2680, 460],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "🎉 כל הכבוד! סיימת את כל השאלות.\\nלחץ כדי להתחיל מחדש:",
+        "additionalFields": {
+          "reply_markup": "{\"inline_keyboard\":[[{\"text\":\"התחל מחדש 🔄\",\"callback_data\":\"restart\"}]]}"
+        }
+      },
+      "id": "send-done-flag",
+      "name": "Send Done Message (Flag)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2460, 580],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO users (telegram_user_id, name)\nVALUES ({{ $json.telegramUserId }}, '{{ $json.firstName.replace(/'/g, \"''\") }}')\nON CONFLICT (telegram_user_id) DO UPDATE SET name = EXCLUDED.name\nRETURNING id;",
+        "options": {}
+      },
+      "id": "upsert-user-restart",
+      "name": "Upsert User (Restart)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 700],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const user = $input.first().json;\nconst routeData = $('Route Update').first().json;\nreturn [{ json: { ...routeData, userId: user.id } }];\n"
+      },
+      "id": "merge-restart",
+      "name": "Merge: userId (Restart)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 700]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM answers_log WHERE user_id = {{ $json.userId }};",
+        "options": {}
+      },
+      "id": "clear-history",
+      "name": "Clear Answer History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1140, 700],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "callback",
+        "operation": "answerQuery",
+        "queryId": "={{ $('Merge: userId (Restart)').first().json.callbackQueryId }}",
+        "additionalFields": {}
+      },
+      "id": "ack-restart",
+      "name": "Ack Callback (Restart)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1360, 700],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT q.*\nFROM questions q\nORDER BY RANDOM()\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "fetch-first-question-restart",
+      "name": "Fetch First Question (Restart)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1580, 700],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "Supabase Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $input.first().json;\nconst ctx = $('Merge: userId (Restart)').first().json;\n\nconst text =\n  `*${q.question}*\\n\\n` +\n  `1\\. ${q.option_a}\\n` +\n  `2\\. ${q.option_b}\\n` +\n  `3\\. ${q.option_c}\\n` +\n  `4\\. ${q.option_d}\\n\\n` +\n  `מה התשובה הכי נכונה?`;\n\nconst inline_keyboard = [\n  [\n    { text: '1', callback_data: `1|${q.id}` },\n    { text: '2', callback_data: `2|${q.id}` },\n    { text: '3', callback_data: `3|${q.id}` },\n    { text: '4', callback_data: `4|${q.id}` }\n  ],\n  [\n    { text: 'סמן כשאלה לא ברורה', callback_data: `flag_${q.id}` }\n  ]\n];\n\nreturn [{\n  json: {\n    chatId: ctx.chatId,\n    text,\n    reply_markup: JSON.stringify({ inline_keyboard })\n  }\n}];\n"
+      },
+      "id": "build-restart-msg",
+      "name": "Build Question Message (Restart)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 700]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "MarkdownV2",
+          "reply_markup": "={{ $json.reply_markup }}"
+        }
+      },
+      "id": "send-first-question-restart",
+      "name": "Send First Question (Restart)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2020, 700],
+      "credentials": {
+        "telegramApi": { "id": "TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{ "node": "Route Update", "type": "main", "index": 0 }]]
+    },
+    "Route Update": {
+      "main": [[{ "node": "Switch: Update Type", "type": "main", "index": 0 }]]
+    },
+    "Switch: Update Type": {
+      "main": [
+        [{ "node": "Upsert User (Start)",   "type": "main", "index": 0 }],
+        [{ "node": "Parse Answer Callback",  "type": "main", "index": 0 }],
+        [{ "node": "Parse Flag Callback",    "type": "main", "index": 0 }],
+        [{ "node": "Upsert User (Restart)",  "type": "main", "index": 0 }]
+      ]
+    },
+
+    "Upsert User (Start)": {
+      "main": [[{ "node": "Merge: userId (Start)", "type": "main", "index": 0 }]]
+    },
+    "Merge: userId (Start)": {
+      "main": [[{ "node": "Fetch Next Question (Start)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Next Question (Start)": {
+      "main": [[{ "node": "Check Question Found (Start)", "type": "main", "index": 0 }]]
+    },
+    "Check Question Found (Start)": {
+      "main": [[{ "node": "Question Found? (Start)", "type": "main", "index": 0 }]]
+    },
+    "Question Found? (Start)": {
+      "main": [
+        [{ "node": "Build Question Message",    "type": "main", "index": 0 }],
+        [{ "node": "Send Done Message (Start)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Question Message": {
+      "main": [[{ "node": "Send Question (Start)", "type": "main", "index": 0 }]]
+    },
+
+    "Parse Answer Callback": {
+      "main": [[{ "node": "Upsert User (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Upsert User (Answer)": {
+      "main": [[{ "node": "Merge: userId (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Merge: userId (Answer)": {
+      "main": [[{ "node": "Fetch Question (Check Answer)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Question (Check Answer)": {
+      "main": [[{ "node": "Evaluate Answer", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Answer": {
+      "main": [[{ "node": "Log Answer", "type": "main", "index": 0 }]]
+    },
+    "Log Answer": {
+      "main": [[{ "node": "Ack Callback (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Ack Callback (Answer)": {
+      "main": [[{ "node": "Build Feedback Text", "type": "main", "index": 0 }]]
+    },
+    "Build Feedback Text": {
+      "main": [[{ "node": "Send Feedback", "type": "main", "index": 0 }]]
+    },
+    "Send Feedback": {
+      "main": [[{ "node": "Fetch Next Question (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Next Question (Answer)": {
+      "main": [[{ "node": "Check Next Question (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Check Next Question (Answer)": {
+      "main": [[{ "node": "Question Found? (Answer)", "type": "main", "index": 0 }]]
+    },
+    "Question Found? (Answer)": {
+      "main": [
+        [{ "node": "Build Next Question Message",    "type": "main", "index": 0 }],
+        [{ "node": "Send Done Message (Answer)",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Next Question Message": {
+      "main": [[{ "node": "Send Next Question (Answer)", "type": "main", "index": 0 }]]
+    },
+
+    "Parse Flag Callback": {
+      "main": [[{ "node": "Upsert User (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Upsert User (Flag)": {
+      "main": [[{ "node": "Merge: userId (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Merge: userId (Flag)": {
+      "main": [[{ "node": "Insert Flag", "type": "main", "index": 0 }]]
+    },
+    "Insert Flag": {
+      "main": [[{ "node": "Ack Callback (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Ack Callback (Flag)": {
+      "main": [[{ "node": "Fetch Next Question (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Next Question (Flag)": {
+      "main": [[{ "node": "Check Next Question (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Check Next Question (Flag)": {
+      "main": [[{ "node": "Question Found? (Flag)", "type": "main", "index": 0 }]]
+    },
+    "Question Found? (Flag)": {
+      "main": [
+        [{ "node": "Build Next Question Message (Flag)", "type": "main", "index": 0 }],
+        [{ "node": "Send Done Message (Flag)",           "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Next Question Message (Flag)": {
+      "main": [[{ "node": "Send Next Question (Flag)", "type": "main", "index": 0 }]]
+    },
+
+    "Upsert User (Restart)": {
+      "main": [[{ "node": "Merge: userId (Restart)", "type": "main", "index": 0 }]]
+    },
+    "Merge: userId (Restart)": {
+      "main": [[{ "node": "Clear Answer History", "type": "main", "index": 0 }]]
+    },
+    "Clear Answer History": {
+      "main": [[{ "node": "Ack Callback (Restart)", "type": "main", "index": 0 }]]
+    },
+    "Ack Callback (Restart)": {
+      "main": [[{ "node": "Fetch First Question (Restart)", "type": "main", "index": 0 }]]
+    },
+    "Fetch First Question (Restart)": {
+      "main": [[{ "node": "Build Question Message (Restart)", "type": "main", "index": 0 }]]
+    },
+    "Build Question Message (Restart)": {
+      "main": [[{ "node": "Send First Question (Restart)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-06-21T00:00:00.000Z",
+  "versionId": "1"
+}
