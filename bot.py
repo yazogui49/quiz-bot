@@ -52,7 +52,7 @@ def _question_keyboard(question_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("3", callback_data=f"ans|3|{question_id}"),
                 InlineKeyboardButton("4", callback_data=f"ans|4|{question_id}"),
             ],
-            [InlineKeyboardButton("סמן שאלה כלא ברורה/מוזרה/לא נכונה", callback_data=f"flag|{question_id}")],
+            [InlineKeyboardButton("סמן שאלה כלא ברורה/מוזרה/לא נכונה/לא בחומר שלנו", callback_data=f"flag|{question_id}")],
         ]
     )
 
