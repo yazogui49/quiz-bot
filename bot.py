@@ -52,7 +52,11 @@ def _question_keyboard(question_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("3", callback_data=f"ans|3|{question_id}"),
                 InlineKeyboardButton("4", callback_data=f"ans|4|{question_id}"),
             ],
-            [InlineKeyboardButton("סמן שאלה כלא ברורה/לא נכונה/לא בחומר שלנו", callback_data=f"flag|{question_id}")],
+            [
+                InlineKeyboardButton("לא ברורה", callback_data=f"flag|{question_id}|unclear"),
+                InlineKeyboardButton("לא נכונה", callback_data=f"flag|{question_id}|wrong"),
+                InlineKeyboardButton("לא בחומר", callback_data=f"flag|{question_id}|off_topic"),
+            ],
         ]
     )
 
@@ -116,12 +120,14 @@ async def on_flag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer("תודה על הדיווח 🙏")
 
-    question_id = int(query.data.split("|")[1])
+    parts = query.data.split("|")
+    question_id = int(parts[1])
+    reason = parts[2] if len(parts) > 2 else "unclear"
 
     user = update.effective_user
     user_id = await db.upsert_user(user.id, user.first_name)
 
-    await db.flag_question(user_id, question_id)
+    await db.flag_question(user_id, question_id, reason)
     await _send_next_or_done(query.message.chat_id, user_id, context)
 
 

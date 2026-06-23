@@ -48,9 +48,9 @@ async def log_answer(user_id: int, question_id: int, was_correct: bool) -> None:
     ).execute()
 
 
-async def flag_question(user_id: int, question_id: int) -> None:
+async def flag_question(user_id: int, question_id: int, reason: str = "unclear") -> None:
     _get_client().table("question_flags").upsert(
-        {"user_id": user_id, "question_id": question_id},
+        {"user_id": user_id, "question_id": question_id, "reason": reason},
         on_conflict="user_id,question_id",
     ).execute()
 
