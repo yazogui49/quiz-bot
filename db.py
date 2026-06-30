@@ -36,7 +36,7 @@ async def get_question_by_id(question_id: int) -> Optional[dict]:
         .table("questions")
         .select("id, option_a, option_b, option_c, option_d, correct_answer")
         .eq("id", question_id)
-        .single()
+        .maybe_single()
         .execute()
     )
     return result.data
