@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 _OPTION_KEY = {"1": "option_a", "2": "option_b", "3": "option_c", "4": "option_d"}
 
 DONE_TEXT = "🎉 כל הכבוד! סיימת את כל השאלות.\nלחץ כדי להתחיל מחדש:"
-DONE_KEYBOARD = InlineKeyboardMarkup(
-    [[InlineKeyboardButton("התחל מחדש 🔄", callback_data="restart")]]
-)
+DONE_KEYBOARD = InlineKeyboardMarkup([
+    [InlineKeyboardButton("התחל מחדש 🔄", callback_data="restart")],
+    [InlineKeyboardButton("📊 הביצועים שלי לפי נושא", callback_data="stats")],
+])
 
 
 def _question_text(q: dict) -> str:
@@ -61,6 +62,21 @@ def _question_keyboard(question_id: int) -> InlineKeyboardMarkup:
     )
 
 
+# ── Stats helper ──────────────────────────────────────────────────────────────
+
+async def _send_stats(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    stats = await db.get_topic_stats(user_id)
+    if not stats:
+        await context.bot.send_message(chat_id=chat_id, text="עדיין לא ענית על שאלות. שלח /start כדי להתחיל!")
+        return
+    lines = ["📊 <b>הביצועים שלך לפי נושא:</b>\n"]
+    for row in stats:
+        pct = int(row["pct"])
+        emoji = "✅" if pct >= 70 else "⚠️" if pct >= 50 else "❌"
+        lines.append(f"{emoji} <b>{row['topic']}</b>\n{row['correct']}/{row['total']} ({pct}%)\n")
+    await context.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+
+
 # ── Shared helper ─────────────────────────────────────────────────────────────
 
 async def _send_next_or_done(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -81,6 +97,20 @@ async def _send_next_or_done(chat_id: int, user_id: int, context: ContextTypes.D
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    user_id = await db.upsert_user(user.id, user.first_name)
+    await _send_stats(update.effective_chat.id, user_id, context)
+
+
+async def on_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    user_id = await db.upsert_user(user.id, user.first_name)
+    await _send_stats(query.message.chat_id, user_id, context)
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -160,9 +190,11 @@ def main() -> None:
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CallbackQueryHandler(on_answer,  pattern=r"^ans\|"))
     app.add_handler(CallbackQueryHandler(on_flag,    pattern=r"^flag\|"))
     app.add_handler(CallbackQueryHandler(on_restart, pattern=r"^restart$"))
+    app.add_handler(CallbackQueryHandler(on_stats,   pattern=r"^stats$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_unknown_message))
 
     logger.info("Bot starting...")
