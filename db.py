@@ -36,10 +36,10 @@ async def get_question_by_id(question_id: int) -> Optional[dict]:
         .table("questions")
         .select("id, option_a, option_b, option_c, option_d, correct_answer")
         .eq("id", question_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
-    return result.data
+    return result.data[0] if result.data else None
 
 
 async def log_answer(user_id: int, question_id: int, was_correct: bool) -> None:
