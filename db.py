@@ -55,6 +55,11 @@ async def flag_question(user_id: int, question_id: int, reason: str = "unclear")
     ).execute()
 
 
+async def get_test_questions(user_id: int) -> list:
+    result = _get_client().rpc("get_test_questions", {"p_user_id": user_id}).execute()
+    return result.data
+
+
 async def get_topic_stats(user_id: int) -> list:
     result = _get_client().rpc("get_topic_stats", {"p_user_id": user_id}).execute()
     return result.data
