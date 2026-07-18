@@ -154,7 +154,7 @@ async def _start_test(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_
     first = questions[0]
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"🎯 <b>מצב מבחן — {len(questions)} שאלות</b>\nענה על כל השאלות ובסוף תקבל סיכום.\n\nשאלה 1/{len(questions)}:\n\n" + _question_text(first),
+        text=f"🎯 <b>מצב מבחן — {len(questions)} שאלות</b>\nענה על כל השאלות ובסוף תקבל סיכום.\n💡 ניתן לשנות תשובה על שאלה שכבר ענית — פשוט גלול למעלה ולחץ שוב.\n\nשאלה 1/{len(questions)}:\n\n" + _question_text(first),
         parse_mode="HTML",
         reply_markup=_test_question_keyboard(first["id"]),
     )
@@ -216,6 +216,13 @@ async def on_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         was_correct = answer == q["correct_answer"]
         await db.log_answer(user_id, question_id, was_correct)
+
+        # If already answered, update result in summary but don't send a new question
+        existing = next((i for i, r in enumerate(test["results"]) if r["q"]["id"] == question_id), None)
+        if existing is not None:
+            test["results"][existing] = {"topic": q["topic"], "was_correct": was_correct, "q": q}
+            return
+
         test["results"].append({"topic": q["topic"], "was_correct": was_correct, "q": q})
         test["answered"] += 1
 
