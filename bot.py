@@ -176,6 +176,25 @@ async def on_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_stats(query.message.chat_id, user_id, context)
 
 
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    user_id = await db.upsert_user(user.id, user.first_name)
+
+    rows = await db.get_leaderboard()
+    if not rows:
+        await update.message.reply_text("עדיין אין נתונים. שלח /start כדי להתחיל!")
+        return
+
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = ["🏆 <b>לוח המובילים</b>\n"]
+    for i, row in enumerate(rows, 1):
+        place = medals.get(i, f"{i}.")
+        marker = "  ← <b>אתה</b>" if row["user_id"] == user_id else ""
+        lines.append(f"{place} {row['name']} — {row['correct']} נכון ({row['pct']}%){marker}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = await db.upsert_user(user.id, user.first_name)
@@ -297,6 +316,7 @@ async def post_init(app: Application) -> None:
         BotCommand("start", "התחל ללמוד — שאלה אחר שאלה"),
         BotCommand("test", "מצב מבחן — 26 שאלות עם סיכום בסוף"),
         BotCommand("stats", "הביצועים שלי לפי נושא"),
+        BotCommand("leaderboard", "לוח המובילים — ראה את הדירוג שלך"),
     ])
 
 
@@ -313,6 +333,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CallbackQueryHandler(on_answer,     pattern=r"^ans\|"))
     app.add_handler(CallbackQueryHandler(on_flag,       pattern=r"^flag\|"))
     app.add_handler(CallbackQueryHandler(on_restart,    pattern=r"^restart$"))

@@ -60,6 +60,11 @@ async def get_test_questions(user_id: int) -> list:
     return result.data
 
 
+async def get_leaderboard() -> list:
+    result = _get_client().rpc("get_leaderboard", {}).execute()
+    return result.data
+
+
 async def get_topic_stats(user_id: int) -> list:
     result = _get_client().rpc("get_topic_stats", {"p_user_id": user_id}).execute()
     return result.data
